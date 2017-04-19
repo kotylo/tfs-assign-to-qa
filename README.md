@@ -6,7 +6,6 @@ You'll need to go through the App.config, set URL for TFS, your Project Name, an
 It will monitor *staging* branch and get all TFS pull-requests for it.
 
 Once the change has been found, item would be processed under **currently impersonated** user account. Processed means that your TFS work items structure is following:
-
 1. PBI or BUG
 1.1. **Child** Task for Developer. Assigned to Developer.
 1.2. Child Task for QA. Assigned to QA.
