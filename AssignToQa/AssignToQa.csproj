@@ -32,6 +32,9 @@
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
+  <PropertyGroup>
+    <ApplicationIcon>assign-to-qa.ico</ApplicationIcon>
+  </PropertyGroup>
   <ItemGroup>
     <Reference Include="Newtonsoft.Json, Version=10.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
       <HintPath>..\packages\Newtonsoft.Json.10.0.1\lib\net45\Newtonsoft.Json.dll</HintPath>
@@ -56,15 +59,26 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Constants\Constants.cs" />
+    <Compile Include="Data\DeveloperHasNotFinishedTaskException.cs" />
+    <Compile Include="Data\UpdateWorkItemRequest.cs" />
     <Compile Include="Flasher.cs" />
     <Compile Include="Data\LastChangedWorkItems.cs" />
+    <Compile Include="Helpers\EnumHelpers.cs" />
     <Compile Include="Looper.cs" />
+    <Compile Include="Managers\TfsCrudManager.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Helpers\TfsHelper.cs" />
     <Compile Include="TfsWorker.cs" />
+    <Compile Include="WorkItemsWorker\WorkItem.cs" />
+    <Compile Include="WorkItemsWorker\WorkItemsWorker.cs" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="App.config" />
+    <None Include="App.config">
+      <SubType>Designer</SubType>
+    </None>
+    <Content Include="assign-to-qa.ico" />
     <Content Include="NLog.config">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       <SubType>Designer</SubType>

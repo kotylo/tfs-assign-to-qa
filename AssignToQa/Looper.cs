@@ -26,9 +26,27 @@ namespace AssignToQa
 
             foreach (string repository in _repositoryList)
             {
-                var tfsWorker = new TfsWorker(repository);
-                _tfsWorkers.Add(tfsWorker);
+                var branchStartIndex = repository.IndexOf("[", StringComparison.Ordinal);
+                if (branchStartIndex >= 0)
+                {
+                    // There are branches inside, create worker for each of them
+                    var repositoryName = repository.Remove(branchStartIndex);
+                    var branchesRaw = repository.Substring(branchStartIndex + 1, repository.Length-branchStartIndex-2);
+                    var branchNames = branchesRaw.Split(',').Select(x => x.Trim()).ToList();
+
+                    foreach (string branchName in branchNames)
+                    {
+                        var tfsWorker = new TfsWorker(repositoryName, branchName);
+                        _tfsWorkers.Add(tfsWorker);
+                    }
+                }
+                else
+                {
+                    throw new ArgumentException(
+                        "Please specify branch name to monitor in repositoryList property of config, with following syntax: Project[BranchName1, BranchName2]");
+                }
             }
+            var workItemsWorker = new WorkItemsWorker.WorkItemsWorker();
             
             while (keepRunning)
             {
@@ -44,6 +62,8 @@ namespace AssignToQa
                 {
                     _logger.Log(LogLevel.Error, $"Error happened in the LOOP: {ex}");
                 }
+
+                workItemsWorker.AutoUpdate();
 
                 _logger.Log(LogLevel.Debug, $"Sleeping for {minutesToSleep.Minutes} minutes");
                 Console.SetCursorPosition(0, Console.CursorTop - 1);

@@ -11,6 +11,8 @@ using AssignToQa.Data;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using NLog;
+using AssignToQa.Helpers;
+using AssignToQa.Managers;
 
 namespace AssignToQa
 {
@@ -20,10 +22,10 @@ namespace AssignToQa
 
         private string _personalAccessToken = ConfigurationManager.AppSettings["pat"];
 
-        private string _baseUrl = ConfigurationManager.AppSettings["baseUrl"].TrimEnd('/');
-        private string _baseProjectName = ConfigurationManager.AppSettings["baseProjectName"];
         private string _defaultTester  = ConfigurationManager.AppSettings["defaultTester"];
         private string _defaultDomain = ConfigurationManager.AppSettings["defaultDomain"];
+        private string _readyForTestTag = ConfigurationManager.AppSettings["readyForTestTag"];
+        private string _nonTestableTag = ConfigurationManager.AppSettings["nonTestableTag"];
 
         private List<string> _titlesToSkip =
             ConfigurationManager.AppSettings["titlesToSkip"].Split(new[] {";"}, StringSplitOptions.RemoveEmptyEntries)
@@ -33,22 +35,18 @@ namespace AssignToQa
             ConfigurationManager.AppSettings["allowedCreators"].Split(new[] {";"}, StringSplitOptions.RemoveEmptyEntries)
                 .ToList();
         private Dictionary<string, string> _customTesterNamesMapping = new Dictionary<string, string>();
-        
-        private string _pullRequestsToTake = ConfigurationManager.AppSettings["pullRequestsToTake"];
-        
-        private string _getSetWorkItemUrlFormat;
-        private string _urlToRepository;
 
-        private int _lastPullRequestsCount;
         private LastChangedWorkItems _lastChangedWorkItems = new LastChangedWorkItems();
         private string _pathToProcessedPullRequests = "processed.txt";
         private string _name;
 
-        public TfsWorker(string repositoryName)
+        private TfsCrudManager _tfsCrudManager;
+
+        public TfsWorker(string repositoryName, string branchName)
         {
+            _tfsCrudManager = new TfsCrudManager(repositoryName, branchName);
+
             this._name = repositoryName;
-            _urlToRepository = $"{_baseUrl}/{_baseProjectName}/_apis/git/repositories/{repositoryName}/pullRequests?targetRefName=refs/heads/staging&api-version=3.0&status=completed";
-            _getSetWorkItemUrlFormat = _baseUrl + "/_apis/wit/workitems/{0}?api-version=1.0&$expand=relations";
 
             LoadCustomTesterNamesMapping();
         }
@@ -69,95 +67,30 @@ namespace AssignToQa
 
         public object Name => _name;
 
-        public string GetUrl(string url)
-        {
-            try
-            {
-                using (WebClient client = new WebClient())
-                {
-                    client.UseDefaultCredentials = true;
-                    var responseBody = client.DownloadString(url);
-                    return responseBody;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.Log(LogLevel.Error, $"Error reading {url}: {ex}");
-            }
-            return null;
-        }
+        //[Obsolete("Authentication with PAT didn't work. Don't use this method.")]
+        //public async void GetProjectsOld()
+        //{
+        //    using (HttpClient client = new HttpClient())
+        //    {
+        //        client.DefaultRequestHeaders.Accept.Add(
+        //            new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
 
-        public JObject GetWorkItem(string url)
-        {
-            var workItemIdMatch = Regex.Match(url, @"/(?<id>\d{6})$");
-            if (workItemIdMatch.Success)
-            {
-                var id = int.Parse(workItemIdMatch.Groups["id"].ToString());
-                return GetWorkItem(id);
-            }
-            _logger.Log(LogLevel.Error, $"Can't parse work item ID from this URL: {url}");
-            return null;
-        }
+        //        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
+        //            Convert.ToBase64String(
+        //                System.Text.ASCIIEncoding.ASCII.GetBytes($":{_personalAccessToken}")));
 
-        public JObject GetWorkItem(int id)
-        {
-            var url = string.Format(_getSetWorkItemUrlFormat, id);
-            var workItemString = GetUrl(url);
-            if (workItemString == null)
-            {
-                return null;
-            }
-            var workItem = JObject.Parse(workItemString);
-            return workItem;
-        }
-
-        public string GetPullRequests()
-        {
-            try
-            {
-                using (WebClient client = new WebClient())
-                {
-                    client.UseDefaultCredentials = true;
-                    var pullRequestsToTake = $"&$top={_pullRequestsToTake}";
-                    if (_pullRequestsToTake == "all")
-                    {
-                        pullRequestsToTake = string.Empty;
-                    }
-                    var url = _urlToRepository + pullRequestsToTake;
-                    return client.DownloadString(new Uri(url));
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.Log(LogLevel.Error, "Error reading pull requests: " + ex);
-            }
-            return null;
-        }
-
-        [Obsolete("Authentication with PAT didn't work. Don't use this method.")]
-        public async void GetProjectsOld()
-        {
-            using (HttpClient client = new HttpClient())
-            {
-                client.DefaultRequestHeaders.Accept.Add(
-                    new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
-
-                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
-                    Convert.ToBase64String(
-                        System.Text.ASCIIEncoding.ASCII.GetBytes($":{_personalAccessToken}")));
-
-                using (HttpResponseMessage response = client.GetAsync(_urlToRepository).Result)
-                {
-                    response.EnsureSuccessStatusCode();
-                    string responseBody = await response.Content.ReadAsStringAsync();
-                    _logger.Log(LogLevel.Trace, responseBody);
-                }
-            }
-        }
+        //        using (HttpResponseMessage response = client.GetAsync(_urlToRepository).Result)
+        //        {
+        //            response.EnsureSuccessStatusCode();
+        //            string responseBody = await response.Content.ReadAsStringAsync();
+        //            _logger.Log(LogLevel.Trace, responseBody);
+        //        }
+        //    }
+        //}
 
         public async void AutoUpdate()
         {
-            var pullRequests = GetPullRequests();
+            var pullRequests = _tfsCrudManager.GetPullRequests();
             ParsePullRequests(pullRequests);
         }
 
@@ -303,10 +236,11 @@ namespace AssignToQa
             foreach (int workItemId in workItemIds)
             {
                 _logger.Log(LogLevel.Debug, $"\tGetting #{workItemId}... ");
-                var workItem = GetWorkItem(workItemId);
+                var workItem = _tfsCrudManager.GetWorkItem(workItemId);
                 if (workItem == null)
                 {
                     _logger.Log(LogLevel.Error, "ERROR! ");
+                    _lastChangedWorkItems.FailureCount++;
                     continue;
                 }
                 _logger.Log(LogLevel.Debug, "Done! ");
@@ -337,40 +271,81 @@ namespace AssignToQa
                     continue;
                 }
 
-                if (state == "Done")
+                if (state == Constants.Tfs.State.Done.GetDescription())
                 {
                     _logger.Log(LogLevel.Debug, "Skipping DONE item...");
                     continue;
                 }
 
-                if (tags.Contains("Ready For Test"))
+                if (state == Constants.Tfs.State.Removed.GetDescription())
                 {
-                    _logger.Log(LogLevel.Debug, "Skipping already marked as 'Ready for Test' item...");
+                    _logger.Log(LogLevel.Debug, "Skipping REMOVED item...");
                     continue;
                 }
 
-                var foundUser = FindUserToTest(fields, workItem);
-                if (foundUser == null)
+                if (tags.Contains(_readyForTestTag))
                 {
-                    _logger.Log(LogLevel.Debug, $"Assigning it to default tester {_defaultTester}... ");
-                    foundUser = _defaultTester;
+                    _logger.Log(LogLevel.Debug, $"Skipping already marked as '{_readyForTestTag}' item...");
+                    continue;
+                }
+
+                string foundUser = null;
+                if (!tags.Contains(_nonTestableTag))
+                {
+                    // Only find tester when it's a Testable item
+                    try
+                    {
+                        foundUser = FindUserToTest(fields, workItem);
+                        if (foundUser == null)
+                        {
+                            _logger.Log(LogLevel.Debug, $"Assigning it to default tester {_defaultTester}... ");
+                            foundUser = _defaultTester;
+                        }
+                    }
+                    catch (DeveloperHasNotFinishedTaskException)
+                    {
+                        _logger.Log(LogLevel.Info,
+                            $"There is a non-Done child Development task, Skipping this workItem.");
+                        continue;
+                    }
+                }
+
+                if (tags.Contains(_nonTestableTag))
+                {
+                    _logger.Log(LogLevel.Debug, $"Setting Done for '{_nonTestableTag}' item... Because all tasks are done.");
+                    var result = UpdateWorkItem(new UpdateWorkItemRequest()
+                    {
+                        AssignedTo = foundUser,
+                        ExistingFields = fields,
+                        Tags = tags,
+                        WorkItemId = workItemId,
+                        State = Constants.Tfs.State.Done
+                    });
+                    if (result == null)
+                    {
+                        _logger.Log(LogLevel.Error, "ERROR! ");
+                        _lastChangedWorkItems.FailureCount++;
+                        continue;
+                    }
+                    _logger.Log(LogLevel.Debug, "Done!");
+                    continue;
                 }
 
                 _logger.Log(LogLevel.Debug, $"Adding Ready For Test Tag{(foundUser == null ? "" : " and assigning to user " + foundUser)}... ");
 
-                if (!tags.Contains("Ready For Test"))
+                tags = TfsHelper.AddTag(tags, _readyForTestTag);
+
+                string updateWorkItemResult = UpdateWorkItem(new UpdateWorkItemRequest()
                 {
-                    var preChar = string.Empty;
-                    if (!string.IsNullOrWhiteSpace(tags))
-                    {
-                        preChar = "; ";
-                    }
-                    tags += $"{preChar}Ready For Test";
-                }
-                string updateWorkItemResult = UpdateWorkItem(workItemId, tags, foundUser, fields);
+                    AssignedTo = foundUser,
+                    ExistingFields = fields,
+                    Tags = tags,
+                    WorkItemId = workItemId
+                });
                 if (updateWorkItemResult == null)
                 {
                     _logger.Log(LogLevel.Error, "ERROR! ");
+                    _lastChangedWorkItems.FailureCount++;
                     continue;
                 }
                 _logger.Log(LogLevel.Debug, "Done!");
@@ -470,7 +445,7 @@ namespace AssignToQa
                 if (relationType == "System.LinkTypes.Hierarchy-Forward")
                 {
                     var workItemUrl = relation["url"].ToString();
-                    var workItem = GetWorkItem(workItemUrl);
+                    var workItem = _tfsCrudManager.GetWorkItem(workItemUrl);
                     if (workItem != null)
                     {
                         var fields = workItem["fields"];
@@ -487,6 +462,7 @@ namespace AssignToQa
                             _logger.Debug($"Skipping Unassigned users");
                             continue;
                         }
+                        var assignedToStr = assignedTo.ToString();
 
                         var state = fields["System.State"].ToString();
                         if (state == "Done")
@@ -494,13 +470,28 @@ namespace AssignToQa
                             _logger.Debug($"Skipping Done items");
                             continue;
                         }
+                        if (state == "Removed")
+                        {
+                            _logger.Debug($"Skipping Removed items");
+                            continue;
+                        }
 
-                        var assignedToDomainUserMatch = Regex.Match(assignedTo.ToString(), "<(?<name>[^>]+)>");
+                        var assignedToCleaned = assignedToStr;
+                        var assignedToDomainUserMatch = Regex.Match(assignedToStr, "<(?<name>[^>]+)>");
                         if (assignedToDomainUserMatch.Success)
                         {
-                            var assignedToCleaned = assignedToDomainUserMatch.Groups["name"];
+                            assignedToCleaned = assignedToDomainUserMatch.Groups["name"].ToString();
                             _logger.Debug($"Added {assignedToCleaned} user to temporary matches...");
-                            assignedList.Add(assignedTo.ToString());
+                            assignedList.Add(assignedToStr);
+                        }
+
+                        var activityType = fields["Microsoft.VSTS.Common.Activity"];
+                        if (activityType != null)
+                        {
+                            if (activityType.ToString() == Constants.Tfs.ActivityNames.DevelopmentActivityName)
+                            {
+                                throw new DeveloperHasNotFinishedTaskException(assignedToCleaned);
+                            }
                         }
                     }
                 }
@@ -522,49 +513,18 @@ namespace AssignToQa
             return null;
         }
 
-        private string UpdateWorkItem(int workItemId, string tags, string assignedTo, JToken fields)
+        private string UpdateWorkItem(UpdateWorkItemRequest request)
         {
-            try
-            {
-                using (WebClient client = new WebClient())
-                {
-                    client.UseDefaultCredentials = true;
-                    client.Headers.Add("Content-Type", "application/json-patch+json");
-
-                    var operations = new List<object>();
-                    var opValue = fields["System.Tags"] == null ? "add" : "replace";
-                    operations.Add(new
-                    {
-                        op = opValue,
-                        path = "/fields/System.Tags",
-                        value = tags
-                    });
-                    if (assignedTo != null)
-                    {
-                        opValue = fields["System.AssignedTo"] == null ? "add" : "replace";
-                        operations.Add(
-                            new
-                            {
-                                op = opValue,
-                                path = "/fields/System.AssignedTo",
-                                value = assignedTo
-                            }
-                            );
-                    }
-                    var serializedData = JsonConvert.SerializeObject(operations);
-                    var url = string.Format(_getSetWorkItemUrlFormat, workItemId);
-                    _logger.Trace($"Sending followind data to url [PATCH][{url}]: {serializedData}");
-                    var responseBody = client.UploadString(url, "PATCH", serializedData);
-                    _lastChangedWorkItems.SuccessCount++;
-                    return responseBody;
-                }
-            }
-            catch (Exception ex)
+            var updateResult = _tfsCrudManager.UpdateWorkItem(request);
+            if (updateResult == null)
             {
                 _lastChangedWorkItems.FailureCount++;
-                _logger.Log(LogLevel.Error, $"Error updating work item #{workItemId}: {ex}");
             }
-            return null;
+            else
+            {
+                _lastChangedWorkItems.SuccessCount++;
+            }
+            return updateResult;
         }
     }
 }
