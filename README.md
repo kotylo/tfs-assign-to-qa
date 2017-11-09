@@ -1,6 +1,13 @@
 # tfs-assign-to-qa
 Reassign TFS workitems to QA, when pull request is merged to staging
 
+# Version history
+## v1.1
+- When there is one task with activity Development, and it's not Done, that means user is still working on the item and it's not marked with Ready For Test tag.
+- Added creation of Tasks for specified users (createTasksUsersList property in config)
+- Who created the PBI is automatically becoming the one having QA Task (in the new functionality above)
+- Monitoring for multiple repositories / branches
+
 # General Usage
 You'll need to go through the App.config, set URL for TFS, your Project Name, and run this Console application.
 It will monitor *staging* branch and get all TFS pull-requests for it.
@@ -14,7 +21,13 @@ So in history you'll see that you've modified this PBI:
 1. Set the "Ready for Test" tag.
 2. Reassigned to QA person (only if all child tasks were *Done*, except the single one for QA). This behavior can be altered, see [Advanced Assigning Rules](#advanced-assigning-rules).
 
+# Auto creation of Dev/QA tasks
+If you want the structure, described in the [General Usage](#general-usage) above, to be automatically recreated each time somebody reassignes PBI/Bug to you with empty tasks, it's possible with **createTasksUsersList** property. Just specify usernames (not everybody in the team may want to agree to this for some reason) who will have their Dev and QA tasks automatically recreated, and application will do that for you every *updateIntervalMinutes* minutes.
+
+In this case, user who created the Bug will be Assigned automatically in QA Task.  
+
 ## Advanced Assigning Rules
+
 If you don't want to create Child tasks for QA, you can reassign PBI or Bug directly to QA, if you specify somewhere in Description that. You can use following phrase:
 
     Should be tested by <name>
