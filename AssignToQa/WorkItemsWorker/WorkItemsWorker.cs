@@ -22,9 +22,11 @@ namespace AssignToQa.WorkItemsWorker
         private string _createTaskItemUrl;
         private ILogger _logger = LogManager.GetCurrentClassLogger();
 
-        private List<string> _createTasksUsersList = ConfigurationManager.AppSettings["createTasksUsersList"].Split(';').ToList();
+        private List<string> _createTasksUsersList = ConfigurationManager.AppSettings["createTasksUsersList"].Split(new []{";"}, StringSplitOptions.RemoveEmptyEntries).ToList();
+        private List<string> _qaTeamUsersList = ConfigurationManager.AppSettings["qaTeamUsersList"].Split(new[] { ";" }, StringSplitOptions.RemoveEmptyEntries).ToList();
         private string _baseProjectName = ConfigurationManager.AppSettings["baseProjectName"];
 
+        private string _defaultTester = ConfigurationManager.AppSettings["defaultTester"];
         private string _nonTestableTag = ConfigurationManager.AppSettings["nonTestableTag"];
 
         private TfsCrudManager _tfsCrudManager;
@@ -39,15 +41,16 @@ namespace AssignToQa.WorkItemsWorker
 
         public void AutoUpdate()
         {
-            foreach (string users in _createTasksUsersList)
+            foreach (string user in _createTasksUsersList)
             {
-                var userName = users;
+                var cleanderUser = user.Trim();
+                var userName = cleanderUser;
                 var teamTagName = string.Empty;
                 var startIndex = userName.IndexOf(":", StringComparison.Ordinal);
                 if (startIndex >= 0)
                 {
                     userName = userName.Remove(startIndex);
-                    teamTagName = users.Substring(startIndex + 1).Trim();
+                    teamTagName = cleanderUser.Substring(startIndex + 1).Trim();
                 }
 
                 var ids = GetPendingWorkItems(userName);
@@ -69,7 +72,7 @@ namespace AssignToQa.WorkItemsWorker
                     continue;
                 }
 
-                _logger.Info($"Adding missing tasks for #{item.Id}.");
+                _logger.Info($"Adding missing tasks for #{item.Id} (to {developerUserName}).");
 
                 double effort = 0;
                 var effortObject = currentItemData["fields"]["Microsoft.VSTS.Scheduling.Effort"];
@@ -120,9 +123,15 @@ namespace AssignToQa.WorkItemsWorker
                 var sprint = currentItemData["fields"]["System.IterationPath"].ToString();
                 var areaPath = currentItemData["fields"]["System.AreaPath"].ToString();
                 var teamProject = currentItemData["fields"]["System.TeamProject"].ToString();
-                var createdBy = currentItemData["fields"]["System.CreatedBy"].ToString();
 
-                var devCreateResult = CreateWorkItem(title, effort, Constants.Tfs.ActivityNames.DevelopmentActivityName, sprint, areaPath, teamProject, developerUserName, item);
+                var createdBy = currentItemData["fields"]["System.CreatedBy"].ToString();
+                var cleanedCreatedBy = TfsHelper.GetUserNameFromString(createdBy);
+                if (cleanedCreatedBy != null)
+                {
+                    createdBy = cleanedCreatedBy;
+                }
+
+                var devCreateResult = CreateWorkItem("Dev: " + title, effort, Constants.Tfs.ActivityNames.DevelopmentActivityName, sprint, areaPath, teamProject, developerUserName, item);
                 if (devCreateResult == null)
                 {
                     throw new Exception("Dev Task has not been created!");
@@ -134,9 +143,16 @@ namespace AssignToQa.WorkItemsWorker
                 }
                 else
                 {
+                    var qaTaskUser = _defaultTester;
+                    if (_qaTeamUsersList.Contains(createdBy))
+                    {
+                        _logger.Info($"User who created this item is in QA list, so let's assign QA task for him.");
+                        qaTaskUser = createdBy;
+                    }
+
                     var qaEffort = 0;
                     var qaCreateResult = CreateWorkItem("QA: " + title, qaEffort, Constants.Tfs.ActivityNames.TestingActivityName, sprint,
-                        areaPath, teamProject, createdBy, item);
+                        areaPath, teamProject, qaTaskUser, item);
                     if (qaCreateResult == null)
                     {
                         throw new Exception("QA Task has not been created!");

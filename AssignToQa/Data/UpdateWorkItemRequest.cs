@@ -11,5 +11,6 @@ namespace AssignToQa.Data
         public JToken ExistingFields { get; set; }
         public string Title { get; set; }
         public Tfs.State State { get; set; }
+        public string Comment { get; set; }
     }
 }

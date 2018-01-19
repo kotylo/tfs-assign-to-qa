@@ -25,6 +25,8 @@ namespace AssignToQa
         private string _defaultTester  = ConfigurationManager.AppSettings["defaultTester"];
         private string _defaultDomain = ConfigurationManager.AppSettings["defaultDomain"];
         private string _readyForTestTag = ConfigurationManager.AppSettings["readyForTestTag"];
+        private string _branchToNotifyInComments = ConfigurationManager.AppSettings["branchToNotifyInComments"];
+        private string _autoTfsCommentPrefix = ConfigurationManager.AppSettings["autoTfsCommentPrefix"];
         private string _nonTestableTag = ConfigurationManager.AppSettings["nonTestableTag"];
 
         private List<string> _titlesToSkip =
@@ -36,6 +38,7 @@ namespace AssignToQa
                 .ToList();
         private Dictionary<string, string> _customTesterNamesMapping = new Dictionary<string, string>();
 
+        private int _lastPullRequestsCount;
         private LastChangedWorkItems _lastChangedWorkItems = new LastChangedWorkItems();
         private string _pathToProcessedPullRequests = "processed.txt";
         private string _name;
@@ -203,7 +206,8 @@ namespace AssignToQa
                 workItemsStringMatch = Regex.Match(sourceBranchName, @"\/(?<items>\d{6})($|\D+)");
                 if (!workItemsStringMatch.Success)
                 {
-                    throw new Exception($"No workitems were found for this pull request, tried to get them from branch name: {sourceBranchName}");
+                    _logger.Log(LogLevel.Warn, $"No workitems were found for this pull request, tried to get them from branch name: {sourceBranchName}, but failed!");
+                    return new List<int>();
                 }
             }
             else
@@ -255,7 +259,7 @@ namespace AssignToQa
                     tags = fields["System.Tags"].ToString();
                 }
 
-                _logger.Log(LogLevel.Debug, $"Status of this {type} is {state}, assigned to {assignedTo ?? "Unassigned" }, title is {title}... ");
+                _logger.Log(LogLevel.Debug, $"Status of this {type} is {state}, assigned to {assignedTo ?? "Unassigned" }, title is {title}");
 
                 var matchedSkipTitle =
                     _titlesToSkip.FirstOrDefault(s => title.IndexOf(s, StringComparison.InvariantCultureIgnoreCase) >= 0);
@@ -312,6 +316,14 @@ namespace AssignToQa
 
                 if (tags.Contains(_nonTestableTag))
                 {
+                    if (GetChildTasks(workItem)
+                        .Any(o => o["fields"]["System.State"].ToString() == Constants.Tfs.State.InProgress.GetDescription() ||
+                                  o["fields"]["System.State"].ToString() == Constants.Tfs.State.ToDo.GetDescription()))
+                    {
+                        _logger.Log(LogLevel.Debug, $"Skipping setting Done for '{_nonTestableTag}' item... Because there are tasks In Progress or To Do.");
+                        continue;
+                    }
+
                     _logger.Log(LogLevel.Debug, $"Setting Done for '{_nonTestableTag}' item... Because all tasks are done.");
                     var result = UpdateWorkItem(new UpdateWorkItemRequest()
                     {
@@ -335,12 +347,15 @@ namespace AssignToQa
 
                 tags = TfsHelper.AddTag(tags, _readyForTestTag);
 
+                var comment = GenerateCommentIfNeeded();
+
                 string updateWorkItemResult = UpdateWorkItem(new UpdateWorkItemRequest()
                 {
                     AssignedTo = foundUser,
                     ExistingFields = fields,
                     Tags = tags,
-                    WorkItemId = workItemId
+                    WorkItemId = workItemId,
+                    Comment = comment
                 });
                 if (updateWorkItemResult == null)
                 {
@@ -349,6 +364,49 @@ namespace AssignToQa
                     continue;
                 }
                 _logger.Log(LogLevel.Debug, "Done!");
+            }
+        }
+
+        private string GenerateCommentIfNeeded()
+        {
+            if (string.Equals(_branchToNotifyInComments, _tfsCrudManager.BranchName, StringComparison.OrdinalIgnoreCase))
+            {
+                return $"{_autoTfsCommentPrefix} This has been fixed in <b>production</b> branch just now";
+            }
+            return null;
+        }
+
+        private IEnumerable<JObject> GetChildTasks(JObject parentWorkItem)
+        {
+            _logger.Log(LogLevel.Info, "Getting child tasks...");
+
+            var relations = parentWorkItem["relations"];
+            if (relations == null)
+            {
+                _logger.Log(LogLevel.Info, $"This workitem doen't have any linked issues.");
+                yield return null;
+            }
+            
+            foreach (var relation in (JArray) relations)
+            {
+                var relationType = relation["rel"].ToString();
+                if (relationType == "System.LinkTypes.Hierarchy-Forward")
+                {
+                    var workItemUrl = relation["url"].ToString();
+                    var workItem = _tfsCrudManager.GetWorkItem(workItemUrl);
+                    if (workItem != null)
+                    {
+                        var fields = workItem["fields"];
+                        var type = fields["System.WorkItemType"].ToString();
+                        if (type != "Task")
+                        {
+                            _logger.Debug($"Skipping non-task items ({type})");
+                            continue;
+                        }
+
+                        yield return workItem;
+                    }
+                }
             }
         }
 
@@ -463,25 +521,29 @@ namespace AssignToQa
                             continue;
                         }
                         var assignedToStr = assignedTo.ToString();
+                        var assignedToFriendlyName = TfsHelper.GetUserNameFromString(assignedToStr, false);
+
+                        Func<string> itemDescriptionFunc = () =>
+                        {
+                            return $"{assignedToFriendlyName} | {fields["System.Title"]}";
+                        };
 
                         var state = fields["System.State"].ToString();
-                        if (state == "Done")
+                        if (state == Constants.Tfs.State.Done.GetDescription())
                         {
-                            _logger.Debug($"Skipping Done items");
+                            _logger.Debug($"Skipping Done items [{itemDescriptionFunc()}]");
                             continue;
                         }
-                        if (state == "Removed")
+                        if (state == Constants.Tfs.State.Removed.GetDescription())
                         {
-                            _logger.Debug($"Skipping Removed items");
+                            _logger.Debug($"Skipping Removed items [{itemDescriptionFunc()}]");
                             continue;
                         }
 
-                        var assignedToCleaned = assignedToStr;
-                        var assignedToDomainUserMatch = Regex.Match(assignedToStr, "<(?<name>[^>]+)>");
-                        if (assignedToDomainUserMatch.Success)
+                        var assignedToDomainUser = TfsHelper.GetUserNameFromString(assignedToStr);
+                        if (assignedToDomainUser != null)
                         {
-                            assignedToCleaned = assignedToDomainUserMatch.Groups["name"].ToString();
-                            _logger.Debug($"Added {assignedToCleaned} user to temporary matches...");
+                            _logger.Debug($"Added user to temporary matches [{itemDescriptionFunc()}]");
                             assignedList.Add(assignedToStr);
                         }
 
@@ -490,7 +552,7 @@ namespace AssignToQa
                         {
                             if (activityType.ToString() == Constants.Tfs.ActivityNames.DevelopmentActivityName)
                             {
-                                throw new DeveloperHasNotFinishedTaskException(assignedToCleaned);
+                                throw new DeveloperHasNotFinishedTaskException(assignedToDomainUser);
                             }
                         }
                     }

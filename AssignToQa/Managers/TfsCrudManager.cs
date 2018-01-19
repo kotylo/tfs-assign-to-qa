@@ -24,10 +24,17 @@ namespace AssignToQa.Managers
         private string _baseProjectName = ConfigurationManager.AppSettings["baseProjectName"];
 
         private string _pullRequestsToTake = ConfigurationManager.AppSettings["pullRequestsToTake"];
+        private string _branchName;
+
+        /// <summary>
+        /// Gets on which branch CrudManager is operating
+        /// </summary>
+        public string BranchName => _branchName;
 
         public TfsCrudManager(string repositoryName, string branchName)
         {
             _urlToRepository = $"{_baseUrl}/{_baseProjectName}/_apis/git/repositories/{repositoryName}/pullRequests?targetRefName=refs/heads/{branchName}&api-version=3.0&status=completed";
+            _branchName = branchName;
             Initialize();
         }
 
@@ -53,6 +60,7 @@ namespace AssignToQa.Managers
 
                     var operations = new List<object>();
                     string opValue = null;
+                    string columnName = string.Empty;
 
                     if (request.State != Constants.Tfs.State.None)
                     {
@@ -66,33 +74,48 @@ namespace AssignToQa.Managers
                     }
                     if (request.Title != null)
                     {
-                        opValue = request.ExistingFields["System.Title"] == null ? "add" : "replace";
+                        columnName = "System.Title";
+                        opValue = request.ExistingFields[columnName] == null ? "add" : "replace";
                         operations.Add(new
                         {
                             op = opValue,
-                            path = "/fields/System.Title",
+                            path = $"/fields/{columnName}",
                             value = request.Title
                         });
                     }
                     if (request.Tags != null)
                     {
-                        opValue = request.ExistingFields["System.Tags"] == null ? "add" : "replace";
+                        columnName = "System.Tags";
+                        opValue = request.ExistingFields[columnName] == null ? "add" : "replace";
                         operations.Add(new
                         {
                             op = opValue,
-                            path = "/fields/System.Tags",
+                            path = $"/fields/{columnName}",
                             value = request.Tags
                         });
                     }
                     if (request.AssignedTo != null)
                     {
-                        opValue = request.ExistingFields["System.AssignedTo"] == null ? "add" : "replace";
+                        columnName = "System.AssignedTo";
+                        opValue = request.ExistingFields[columnName] == null ? "add" : "replace";
                         operations.Add(
                             new
                             {
                                 op = opValue,
-                                path = "/fields/System.AssignedTo",
+                                path = $"/fields/{columnName}",
                                 value = request.AssignedTo
+                            }
+                        );
+                    }
+                    if (request.Comment != null)
+                    {
+                        opValue = "add";
+                        operations.Add(
+                            new
+                            {
+                                op = opValue,
+                                path = "/fields/System.History",
+                                value = request.Comment
                             }
                         );
                     }
